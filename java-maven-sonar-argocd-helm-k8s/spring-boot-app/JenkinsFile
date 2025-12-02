@@ -2,7 +2,7 @@ pipeline {
   agent {
     docker {
       image 'abhishekf5/maven-abhishek-docker-agent:v1'
-      // Run as root and mount Docker socket for docker build/push
+      // Run as root and mount host Docker socket so we can docker build/push
       args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
@@ -26,7 +26,7 @@ pipeline {
 
     stage('Setup JDK 17') {
       steps {
-        // 1) Install JDK 17
+        // Install and switch to Java 17 inside the agent container
         sh '''
           echo "=== Before install, java -version ==="
           java -version || echo "java not found or not set"
@@ -39,11 +39,11 @@ pipeline {
           update-alternatives --list java || echo "no alternatives"
         '''
 
-        // 2) Detect JAVA_HOME for Java 17 and export it for all later stages
         script {
+          // Detect JAVA_HOME for Java 17 dynamically
           def javaHome = sh(
             returnStdout: true,
-            script: "JAVA_BIN=\$(update-alternatives --list java | grep '17' | head -1); dirname \$(dirname \$JAVA_BIN)"
+            script: "JAVA_BIN=$(update-alternatives --list java | grep 'java-17' | head -1); dirname \$(dirname \$JAVA_BIN)"
           ).trim()
 
           echo "Detected JAVA_HOME for JDK 17: ${javaHome}"
@@ -52,7 +52,6 @@ pipeline {
           env.PATH = "${javaHome}/bin:${env.PATH}"
         }
 
-        // 3) Confirm we now use Java 17
         sh '''
           echo "=== After setting JAVA_HOME, java -version ==="
           java -version
@@ -60,9 +59,9 @@ pipeline {
       }
     }
 
-    stage('Checkout') {
+    stage('Checkout (verify)') {
       steps {
-        echo "Source already checked out by Jenkins (Declarative: SCM). Showing workspace:"
+        echo "Source is already checked out by Jenkins job (Declarative: SCM). Showing workspace:"
         sh 'pwd && ls -R'
       }
     }
@@ -106,7 +105,7 @@ pipeline {
 
           echo "Docker image to build: ${dockerImage}"
 
-          // Check docker socket visibility
+          // Check docker socket visibility inside container
           sh 'ls -l /var/run/docker.sock || echo "docker.sock not visible inside agent"'
 
           sh """
@@ -122,29 +121,35 @@ pipeline {
       }
     }
 
-    stage('Update Deployment File') {
+    stage('Update Deployment File & Push to GitHub') {
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'git-credentials',
-          usernameVariable: 'GIT_USER',
-          passwordVariable: 'GIT_PASS'
-        )]) {
-          sh """
-            git config user.email "supneet.sharma@example.com"
-            git config user.name "Supneet Sharma"
+        // Use GitHub PAT stored as a secret text with ID 'git-pat'
+        withCredentials([string(credentialsId: 'git-pat', variable: 'GIT_PAT')]) {
+          // Use plain bash script (no Groovy interpolation for secrets)
+          sh '''#!/bin/bash
+set -e
 
-            # Update the image tag in deployment manifest
-            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \\
-              java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+echo "=== Configuring Git identity ==="
+git config user.email "supneet.sharma@example.com"
+git config user.name "Supneet Sharma"
 
-            git status
+echo "=== Updating deployment manifest image tag ==="
+sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
+  java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
 
-            git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml || true
-            git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
+echo "=== Git status after change ==="
+git status
 
-            git remote set-url origin https://${GIT_USER}:${GIT_PASS}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git
-            git push origin HEAD:main
-          """
+echo "=== Commit changes (if any) ==="
+git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml || true
+git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
+
+echo "=== Setting remote URL with PAT (GitHub username, not email) ==="
+git remote set-url origin https://supneetsharma:${GIT_PAT}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git
+
+echo "=== Pushing to main ==="
+git push origin HEAD:main
+'''
         }
       }
     }
