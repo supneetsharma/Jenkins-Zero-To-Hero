@@ -2,12 +2,22 @@ pipeline {
   agent {
     docker {
       image 'abhishekf5/maven-abhishek-docker-agent:v1'
+      // Mount host Docker socket so the agent can run docker build/push
       args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
 
   environment {
-    SONAR_URL     = 'http://20.63.16.147:9000'
+    // ***** SONAR CONFIG *****
+    SONAR_URL          = 'http://20.63.16.147:9000'
+    SONAR_PROJECT_KEY  = 'Project1'
+    SONAR_PROJECT_NAME = 'Project1'
+
+    // ***** ACR CONFIG *****
+    ACR_REGISTRY   = 'supneet.azurecr.io'
+    ACR_REPOSITORY = 'supneet/bootcampproject'
+
+    // ***** GIT CONFIG *****
     GIT_REPO_NAME = 'Jenkins-Zero-To-Hero'
     GIT_USER_NAME = 'supneetsharma'
   }
@@ -16,7 +26,7 @@ pipeline {
 
     stage('Checkout') {
       steps {
-        sh 'echo "Checkout stage started"'
+        echo "Checking out source code..."
         git branch: 'main',
             url: 'https://github.com/supneetsharma/Jenkins-Zero-To-Hero.git',
             credentialsId: 'git-credentials'
@@ -26,7 +36,10 @@ pipeline {
     stage('Build and Test') {
       steps {
         sh 'ls -ltr'
-        sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn clean package'
+        sh '''
+          cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+          mvn clean package
+        '''
       }
     }
 
@@ -34,32 +47,38 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
           sh """
-            cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && \
+            cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
             mvn clean verify sonar:sonar \
-              -Dsonar.projectKey=Project1 \
-              -Dsonar.projectName='Project1' \
+              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+              -Dsonar.projectName='${SONAR_PROJECT_NAME}' \
               -Dsonar.host.url=${SONAR_URL} \
-              -Dsonar.token=$SONAR_TOKEN
+              -Dsonar.token=${SONAR_TOKEN}
           """
         }
       }
     }
 
     stage('Build and Push Docker Image') {
-      environment {
-        // Final image name: supneet/bootcampproject:<BUILD_NUMBER>
-        // Stored in ACR as: supneet.azurecr.io/supneet/bootcampproject:<BUILD_NUMBER>
-        DOCKER_IMAGE = "supneet.azurecr.io/supneet/bootcampproject:${BUILD_NUMBER}"
-      }
       steps {
         script {
+          // Build final image name: supneet.azurecr.io/supneet/bootcampproject:<BUILD_NUMBER>
+          def imageTag     = env.BUILD_NUMBER
+          def dockerImage  = "${env.ACR_REGISTRY}/${env.ACR_REPOSITORY}:${imageTag}"
+
+          echo "Docker image to build: ${dockerImage}"
+
+          // Helpful debug + try to relax permissions INSIDE the agent container
+          sh 'ls -l /var/run/docker.sock || echo "docker.sock not found inside agent"'
+          sh 'chmod 666 /var/run/docker.sock || true'
+
           sh """
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-            docker build -t ${DOCKER_IMAGE} .
+            docker build -t ${dockerImage} .
           """
-          def dockerImage = docker.image("${DOCKER_IMAGE}")
-          docker.withRegistry('https://supneet.azurecr.io', 'ACR') {
-            dockerImage.push()
+
+          def img = docker.image(dockerImage)
+          docker.withRegistry("https://${env.ACR_REGISTRY}", 'ACR') {
+            img.push()
           }
         }
       }
@@ -67,18 +86,27 @@ pipeline {
 
     stage('Update Deployment File') {
       steps {
-        withCredentials([string(credentialsId: 'git-credentials', variable: 'GITHUB_TOKEN')]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'git-credentials',
+          usernameVariable: 'GIT_USER',
+          passwordVariable: 'GIT_PASS'
+        )]) {
           sh """
             git config user.email "supneet.sharma@example.com"
             git config user.name "Supneet Sharma"
 
+            # Update image tag in deployment manifest
             sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
               java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
 
-            git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+            git status
+
+            git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml || true
             git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
 
-            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:main
+            # Use Jenkins credential for push
+            git remote set-url origin https://${GIT_USER}:${GIT_PASS}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git
+            git push origin HEAD:main
           """
         }
       }
