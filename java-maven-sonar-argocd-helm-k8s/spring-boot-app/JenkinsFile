@@ -26,18 +26,35 @@ pipeline {
 
     stage('Setup JDK 17') {
       steps {
+        // 1) Install JDK 17
         sh '''
-          echo "=== Current Java version ==="
+          echo "=== Before install, java -version ==="
           java -version || echo "java not found or not set"
 
           echo "=== Installing OpenJDK 17 ==="
           apt-get update -y
           apt-get install -y openjdk-17-jdk
 
-          echo "=== Switching default java to JDK 17 ==="
-          update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java || true
+          echo "=== Available java alternatives ==="
+          update-alternatives --list java || echo "no alternatives"
+        '''
 
-          echo "=== Java version AFTER switch ==="
+        // 2) Detect JAVA_HOME for Java 17 and export it for all later stages
+        script {
+          def javaHome = sh(
+            returnStdout: true,
+            script: "JAVA_BIN=\$(update-alternatives --list java | grep '17' | head -1); dirname \$(dirname \$JAVA_BIN)"
+          ).trim()
+
+          echo "Detected JAVA_HOME for JDK 17: ${javaHome}"
+
+          env.JAVA_HOME = javaHome
+          env.PATH = "${javaHome}/bin:${env.PATH}"
+        }
+
+        // 3) Confirm we now use Java 17
+        sh '''
+          echo "=== After setting JAVA_HOME, java -version ==="
           java -version
         '''
       }
@@ -53,6 +70,9 @@ pipeline {
     stage('Build and Test') {
       steps {
         sh '''
+          echo "=== Java version in Build and Test stage ==="
+          java -version
+
           cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
           mvn clean package
         '''
@@ -63,11 +83,14 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
           sh """
+            echo "=== Java version in Static Code Analysis stage ==="
+            java -version
+
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-            mvn clean verify sonar:sonar \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.projectName='${SONAR_PROJECT_NAME}' \
-              -Dsonar.host.url=${SONAR_URL} \
+            mvn clean verify sonar:sonar \\
+              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \\
+              -Dsonar.projectName='${SONAR_PROJECT_NAME}' \\
+              -Dsonar.host.url=${SONAR_URL} \\
               -Dsonar.token=${SONAR_TOKEN}
           """
         }
@@ -111,7 +134,7 @@ pipeline {
             git config user.name "Supneet Sharma"
 
             # Update the image tag in deployment manifest
-            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
+            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \\
               java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
 
             git status
