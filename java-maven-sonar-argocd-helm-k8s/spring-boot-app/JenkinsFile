@@ -2,7 +2,7 @@ pipeline {
   agent {
     docker {
       image 'abhishekf5/maven-abhishek-docker-agent:v1'
-      // Mount host Docker socket so the agent can run docker build/push
+      // Run as root and mount Docker socket for docker build/push
       args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
@@ -24,18 +24,34 @@ pipeline {
 
   stages {
 
+    stage('Setup JDK 17') {
+      steps {
+        sh '''
+          echo "=== Current Java version ==="
+          java -version || echo "java not found or not set"
+
+          echo "=== Installing OpenJDK 17 ==="
+          apt-get update -y
+          apt-get install -y openjdk-17-jdk
+
+          echo "=== Switching default java to JDK 17 ==="
+          update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java || true
+
+          echo "=== Java version AFTER switch ==="
+          java -version
+        '''
+      }
+    }
+
     stage('Checkout') {
       steps {
-        echo "Checking out source code..."
-        git branch: 'main',
-            url: 'https://github.com/supneetsharma/Jenkins-Zero-To-Hero.git',
-            credentialsId: 'git-credentials'
+        echo "Source already checked out by Jenkins (Declarative: SCM). Showing workspace:"
+        sh 'pwd && ls -R'
       }
     }
 
     stage('Build and Test') {
       steps {
-        sh 'ls -ltr'
         sh '''
           cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
           mvn clean package
@@ -61,15 +77,14 @@ pipeline {
     stage('Build and Push Docker Image') {
       steps {
         script {
-          // Build final image name: supneet.azurecr.io/supneet/bootcampproject:<BUILD_NUMBER>
-          def imageTag     = env.BUILD_NUMBER
-          def dockerImage  = "${env.ACR_REGISTRY}/${env.ACR_REPOSITORY}:${imageTag}"
+          // Final image: supneet.azurecr.io/supneet/bootcampproject:<BUILD_NUMBER>
+          def imageTag    = env.BUILD_NUMBER
+          def dockerImage = "${env.ACR_REGISTRY}/${env.ACR_REPOSITORY}:${imageTag}"
 
           echo "Docker image to build: ${dockerImage}"
 
-          // Helpful debug + try to relax permissions INSIDE the agent container
-          sh 'ls -l /var/run/docker.sock || echo "docker.sock not found inside agent"'
-          sh 'chmod 666 /var/run/docker.sock || true'
+          // Check docker socket visibility
+          sh 'ls -l /var/run/docker.sock || echo "docker.sock not visible inside agent"'
 
           sh """
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
@@ -95,7 +110,7 @@ pipeline {
             git config user.email "supneet.sharma@example.com"
             git config user.name "Supneet Sharma"
 
-            # Update image tag in deployment manifest
+            # Update the image tag in deployment manifest
             sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
               java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
 
@@ -104,7 +119,6 @@ pipeline {
             git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml || true
             git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
 
-            # Use Jenkins credential for push
             git remote set-url origin https://${GIT_USER}:${GIT_PASS}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git
             git push origin HEAD:main
           """
