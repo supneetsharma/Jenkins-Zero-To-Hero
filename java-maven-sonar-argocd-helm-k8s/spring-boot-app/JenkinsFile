@@ -15,7 +15,7 @@ pipeline {
 
     // ***** ACR CONFIG *****
     ACR_REGISTRY   = 'supneet.azurecr.io'
-    ACR_REPOSITORY = 'supneet/bootcampproject'
+    ACR_REPOSITORY = 'supneet.azurecr.io/bootcampproject'
 
     // ***** GIT CONFIG *****
     GIT_REPO_NAME = 'Jenkins-Zero-To-Hero'
@@ -104,7 +104,7 @@ mvn clean verify sonar:sonar \
     stage('Build and Push Docker Image') {
       steps {
         script {
-          // Final image: supneet.azurecr.io/supneet/bootcampproject:<BUILD_NUMBER>
+          // Final image: supneet.azurecr.io/bootcampproject:<BUILD_NUMBER>
           def imageTag    = env.BUILD_NUMBER
           def dockerImage = "${env.ACR_REGISTRY}/${env.ACR_REPOSITORY}:${imageTag}"
 
