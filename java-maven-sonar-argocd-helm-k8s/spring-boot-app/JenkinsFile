@@ -40,10 +40,10 @@ pipeline {
         '''
 
         script {
-          // Detect JAVA_HOME for Java 17 dynamically
+          // Detect JAVA_HOME for Java 17 dynamically (avoid Groovy $ interpolation)
           def javaHome = sh(
             returnStdout: true,
-            script: "JAVA_BIN=$(update-alternatives --list java | grep 'java-17' | head -1); dirname \$(dirname \$JAVA_BIN)"
+            script: '''JAVA_BIN=$(update-alternatives --list java | grep "java-17" | head -1 || update-alternatives --list java | head -1); dirname $(dirname $JAVA_BIN)'''
           ).trim()
 
           echo "Detected JAVA_HOME for JDK 17: ${javaHome}"
@@ -80,18 +80,23 @@ pipeline {
 
     stage('Static Code Analysis') {
       steps {
+        // sonar-token is a Secret Text credential
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-          sh """
-            echo "=== Java version in Static Code Analysis stage ==="
-            java -version
+          // Use plain bash string so secrets are not interpolated by Groovy
+          sh '''#!/bin/bash
+set -e
 
-            cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-            mvn clean verify sonar:sonar \\
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \\
-              -Dsonar.projectName='${SONAR_PROJECT_NAME}' \\
-              -Dsonar.host.url=${SONAR_URL} \\
-              -Dsonar.token=${SONAR_TOKEN}
-          """
+echo "=== Java version in Static Code Analysis stage ==="
+java -version
+
+cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+
+mvn clean verify sonar:sonar \
+  -Dsonar.projectKey=$SONAR_PROJECT_KEY \
+  -Dsonar.projectName="$SONAR_PROJECT_NAME" \
+  -Dsonar.host.url=$SONAR_URL \
+  -Dsonar.token=$SONAR_TOKEN
+'''
         }
       }
     }
