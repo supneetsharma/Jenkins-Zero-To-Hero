@@ -15,7 +15,7 @@ pipeline {
 
     // ***** ACR CONFIG *****
     ACR_REGISTRY   = 'supneet.azurecr.io'
-    ACR_REPOSITORY = 'supneet.azurecr.io/bootcampproject'
+    ACR_REPOSITORY = 'bootcampproject'
 
     // ***** GIT CONFIG *****
     GIT_REPO_NAME = 'Jenkins-Zero-To-Hero'
