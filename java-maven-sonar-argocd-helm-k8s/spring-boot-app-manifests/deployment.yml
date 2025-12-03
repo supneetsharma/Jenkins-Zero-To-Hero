@@ -16,6 +16,6 @@ spec:
     spec:
       containers:
       - name: spring-boot-app
-        image: supneet.azurecr.io/bootcampproject:16
+        image: supneet.azurecr.io/bootcampproject:15
         ports:
         - containerPort: 8080
